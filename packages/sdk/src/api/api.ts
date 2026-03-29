@@ -65,24 +65,68 @@ function randomWechatUin(): string {
   return Buffer.from(String(uint32), "utf-8").toString("base64");
 }
 
+/** Build headers shared by both GET and POST requests. */
+function buildCommonHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const routeTag = loadConfigRouteTag();
+  if (routeTag) {
+    headers.SKRouteTag = routeTag;
+  }
+  return headers;
+}
+
 function buildHeaders(opts: { token?: string; body: string }): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     AuthorizationType: "ilink_bot_token",
     "Content-Length": String(Buffer.byteLength(opts.body, "utf-8")),
     "X-WECHAT-UIN": randomWechatUin(),
+    ...buildCommonHeaders(),
   };
   if (opts.token?.trim()) {
     headers.Authorization = `Bearer ${opts.token.trim()}`;
-  }
-  const routeTag = loadConfigRouteTag();
-  if (routeTag) {
-    headers.SKRouteTag = routeTag;
   }
   logger.debug(
     `requestHeaders: ${JSON.stringify({ ...headers, Authorization: headers.Authorization ? "Bearer ***" : undefined })}`,
   );
   return headers;
+}
+
+/**
+ * GET fetch wrapper: send a GET request to a Weixin API endpoint with timeout + abort.
+ * Query parameters should already be encoded in `endpoint`.
+ * Returns the raw response text on success; throws on HTTP error or timeout.
+ */
+export async function apiGetFetch(params: {
+  baseUrl: string;
+  endpoint: string;
+  timeoutMs: number;
+  label: string;
+}): Promise<string> {
+  const base = ensureTrailingSlash(params.baseUrl);
+  const url = new URL(params.endpoint, base);
+  const hdrs = buildCommonHeaders();
+  logger.debug(`GET ${redactUrl(url.toString())}`);
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), params.timeoutMs);
+  try {
+    const res = await fetch(url.toString(), {
+      method: "GET",
+      headers: hdrs,
+      signal: controller.signal,
+    });
+    clearTimeout(t);
+    const rawText = await res.text();
+    logger.debug(`${params.label} status=${res.status} raw=${redactBody(rawText)}`);
+    if (!res.ok) {
+      throw new Error(`${params.label} ${res.status}: ${rawText}`);
+    }
+    return rawText;
+  } catch (err) {
+    clearTimeout(t);
+    throw err;
+  }
 }
 
 /**
