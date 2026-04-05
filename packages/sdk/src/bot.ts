@@ -1,4 +1,6 @@
-import type { Agent } from "./agent/interface.js";
+import path from "node:path";
+
+import type { Agent, ChatResponse } from "./agent/interface.js";
 import {
   clearAllWeixinAccounts,
   DEFAULT_BASE_URL,
@@ -14,8 +16,14 @@ import {
   startWeixinLoginWithQr,
   waitForWeixinLogin,
 } from "./auth/login-qr.js";
+import { downloadRemoteImageToTemp } from "./cdn/upload.js";
+import { getContextToken } from "./messaging/inbound.js";
+import { sendWeixinMediaFile } from "./messaging/send-media.js";
+import { markdownToPlainText, sendMessageWeixin } from "./messaging/send.js";
 import { monitorWeixinProvider } from "./monitor/monitor.js";
 import { logger } from "./util/logger.js";
+
+const MEDIA_TEMP_DIR = "/tmp/weixin-agent/media";
 
 export type LoginOptions = {
   /** Override the API base URL. */
@@ -117,10 +125,100 @@ export function isLoggedIn(): boolean {
 }
 
 /**
+ * A running bot instance — provides proactive messaging capability.
+ *
+ * - `sendMessage(text)` — send a text message to the logged-in user.
+ * - `sendMessage(response)` — send a ChatResponse (text and/or media).
+ */
+export class Bot {
+  private readonly _accountId: string;
+  private readonly _baseUrl: string;
+  private readonly _cdnBaseUrl: string;
+  private readonly _token?: string;
+  private readonly _userId: string;
+
+  /** @internal */
+  constructor(params: {
+    accountId: string;
+    baseUrl: string;
+    cdnBaseUrl: string;
+    token?: string;
+    userId: string;
+  }) {
+    this._accountId = params.accountId;
+    this._baseUrl = params.baseUrl;
+    this._cdnBaseUrl = params.cdnBaseUrl;
+    this._token = params.token;
+    this._userId = params.userId;
+  }
+
+  /**
+   * Proactively send a message to the logged-in WeChat user.
+   *
+   * Accepts either a plain string (sent as text) or a full `ChatResponse`
+   * object (text and/or media).
+   *
+   * Requires at least one inbound message to have been received so that a
+   * valid `context_token` is cached (tokens are valid for ~24 hours).
+   */
+  async sendMessage(message: string | ChatResponse): Promise<void> {
+    const response: ChatResponse =
+      typeof message === "string" ? { text: message } : message;
+
+    const contextToken = getContextToken(this._accountId, this._userId);
+    if (!contextToken) {
+      throw new Error(
+        "没有找到 context_token，需要在 start() 运行期间至少收到过一条消息",
+      );
+    }
+
+    const apiOpts = {
+      baseUrl: this._baseUrl,
+      token: this._token,
+      contextToken,
+    };
+
+    if (response.media) {
+      let filePath: string;
+      const mediaUrl = response.media.url;
+      if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
+        filePath = await downloadRemoteImageToTemp(
+          mediaUrl,
+          path.join(MEDIA_TEMP_DIR, "outbound"),
+        );
+      } else {
+        filePath = path.isAbsolute(mediaUrl) ? mediaUrl : path.resolve(mediaUrl);
+      }
+      await sendWeixinMediaFile({
+        filePath,
+        to: this._userId,
+        text: response.text ? markdownToPlainText(response.text) : "",
+        opts: apiOpts,
+        cdnBaseUrl: this._cdnBaseUrl,
+      });
+      return;
+    }
+
+    if (response.text) {
+      await sendMessageWeixin({
+        to: this._userId,
+        text: markdownToPlainText(response.text),
+        opts: apiOpts,
+      });
+      return;
+    }
+
+    throw new Error("消息必须包含 text 或 media");
+  }
+}
+
+/**
  * Start the bot — long-polls for new messages and dispatches them to the agent.
  * Blocks until the abort signal fires or an unrecoverable error occurs.
+ *
+ * Returns a `Bot` instance with `sendMessage()` for proactive messaging.
  */
-export async function start(agent: Agent, opts?: StartOptions): Promise<void> {
+export async function start(agent: Agent, opts?: StartOptions): Promise<Bot> {
   const log = opts?.log ?? console.log;
 
   // Resolve account
@@ -143,7 +241,23 @@ export async function start(agent: Agent, opts?: StartOptions): Promise<void> {
     );
   }
 
+  const accountData = loadWeixinAccount(account.accountId);
+  const userId = accountData?.userId;
+  if (!userId) {
+    throw new Error(
+      `账号 ${accountId} 没有关联的用户 ID，请重新运行 login`,
+    );
+  }
+
   log(`[weixin] 启动 bot, account=${account.accountId}`);
+
+  const bot = new Bot({
+    accountId: account.accountId,
+    baseUrl: account.baseUrl,
+    cdnBaseUrl: account.cdnBaseUrl,
+    token: account.token,
+    userId,
+  });
 
   await monitorWeixinProvider({
     baseUrl: account.baseUrl,
@@ -154,4 +268,6 @@ export async function start(agent: Agent, opts?: StartOptions): Promise<void> {
     abortSignal: opts?.abortSignal,
     log,
   });
+
+  return bot;
 }
