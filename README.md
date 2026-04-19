@@ -42,6 +42,90 @@ npx weixin-acp start -- kimi acp
 
 更多 ACP 兼容 agent 请参考 [ACP agent 列表](https://agentclientprotocol.com/get-started/agents)。
 
+### 通过 HTTP 接口主动发送消息
+
+`weixin-acp` 支持启动一个 HTTP 服务器，允许通过 HTTP 接口主动向微信发送消息。这在需要从外部系统（如定时任务、webhook、监控系统等）发送消息时非常有用。
+
+#### 启动 HTTP 服务器
+
+使用 `--message-server-port` 和 `--message-server-key` 参数启动：
+
+```bash
+# 启动 Claude Code 并开启 HTTP 服务器
+npx weixin-acp claude-code --message-server-port 3000 --message-server-key mysecret
+
+# 或使用其他 agent
+npx weixin-acp codex --message-server-port 8080 --message-server-key abc123
+```
+
+参数说明：
+- `--message-server-port <port>`: HTTP 服务器监听端口
+- `--message-server-key <key>`: 认证密钥（可选，但强烈建议设置）
+
+#### HTTP 接口使用
+
+服务器提供两个端点：
+
+**1. `/sendmessage` - 发送纯文本消息**
+
+最简单的方式，直接将文本内容作为请求体发送：
+
+```bash
+# 发送文本消息
+curl -X POST http://localhost:3000/sendmessage \
+  -H "Authorization: Bearer mysecret" \
+  -d "你好，这是一条测试消息"
+
+# 使用查询参数认证
+curl -X POST "http://localhost:3000/sendmessage?key=mysecret" \
+  -d "这也是一条测试消息"
+```
+
+**2. `/sendmessage/json` - 发送复杂消息**
+
+支持发送包含媒体附件的完整 `ChatResponse` 对象：
+
+```bash
+# 发送带图片的消息
+curl -X POST http://localhost:3000/sendmessage/json \
+  -H "Authorization: Bearer mysecret" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "这是一张图片",
+    "media": {
+      "type": "image",
+      "url": "/path/to/image.png"
+    }
+  }'
+
+# 发送文件
+curl -X POST http://localhost:3000/sendmessage/json \
+  -H "Authorization: Bearer mysecret" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "这是今日报表",
+    "media": {
+      "type": "file",
+      "url": "/path/to/report.pdf",
+      "fileName": "daily-report.pdf"
+    }
+  }'
+```
+
+#### 认证方式
+
+支持三种认证方式（需要启动时设置了 `--message-server-key`）：
+
+1. **Bearer Token**: `Authorization: Bearer <key>`
+2. **Basic Auth**: `Authorization: Basic <base64(username:password)>` （只验证密码部分）
+3. **Query Parameter**: `?key=<key>`
+
+#### 注意事项
+
+- 主动发送需要先收到过至少一条微信消息，以获取有效的 `context_token`
+- `context_token` 有时效性（约 24 小时），过期后需要重新收到消息才能继续发送
+- 建议在生产环境中设置 `--message-server-key` 以保护接口安全
+
 ## 自定义 Agent
 
 SDK 主要导出三样东西：

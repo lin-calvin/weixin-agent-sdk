@@ -219,7 +219,7 @@ export class Bot {
  *
  * Returns a `Bot` instance with `sendMessage()` for proactive messaging.
  */
-export async function start(agent: Agent, opts?: StartOptions): Promise<Bot> {
+export async function start(agent: Agent, opts?: StartOptions,sendMessageStub?:object): Promise<Bot> {
   const log = opts?.log ?? console.log;
 
   // Resolve account
@@ -259,7 +259,9 @@ export async function start(agent: Agent, opts?: StartOptions): Promise<Bot> {
     token: account.token,
     userId,
   });
-
+  if (sendMessageStub){
+    sendMessageStub.sendMessage=bot.sendMessage.bind(bot)
+  }
   await monitorWeixinProvider({
     baseUrl: account.baseUrl,
     cdnBaseUrl: account.cdnBaseUrl,
