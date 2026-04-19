@@ -111,6 +111,13 @@ export async function processOneMessage(
 ): Promise<void> {
   const receivedAt = Date.now();
   const textBody = extractTextBody(full.item_list);
+  
+  
+ // --- Store context token ---
+  const contextToken = full.context_token;
+  if (contextToken) {
+    setContextToken(deps.accountId, full.from_user_id ?? "", contextToken);
+  }
 
   // --- Slash commands ---
   if (textBody.startsWith("/")) {
@@ -133,11 +140,6 @@ export async function processOneMessage(
     if (slashResult.handled) return;
   }
 
-  // --- Store context token ---
-  const contextToken = full.context_token;
-  if (contextToken) {
-    setContextToken(deps.accountId, full.from_user_id ?? "", contextToken);
-  }
 
   // --- Download media ---
   let media: ChatRequest["media"];

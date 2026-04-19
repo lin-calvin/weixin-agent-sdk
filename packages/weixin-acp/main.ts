@@ -66,15 +66,18 @@ function parseArgs(): {
 
 function startMessageServer(
   port: number,
-  key: string | undefined,
-  bot: Awaited<ReturnType<typeof start>>,
+  key: string | undefined
 ) {
   const server = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
     // CORS headers
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-
+    if (!global.sendMessage) {
+       res.writeHead(500);
+       res.end();
+       return;
+    }
     if (req.method === "OPTIONS") {
       res.writeHead(200);
       res.end();
@@ -147,7 +150,7 @@ function startMessageServer(
           message = body;
         }
 
-        await bot.sendMessage(message);
+        await sendMessage(message);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
       } catch (error) {
@@ -200,14 +203,13 @@ async function startAgent(acpCommand: string, acpArgs: string[] = []) {
     ac.abort();
   });
 
-  const bot = await start(agent, { abortSignal: ac.signal });
-
   // Start HTTP server if parameters are provided
   const { messageServerPort, messageServerKey } = parseArgs();
   if (messageServerPort) {
-    httpServer = startMessageServer(messageServerPort, messageServerKey, bot);
+    httpServer = startMessageServer(messageServerPort, messageServerKey);
   }
-
+  global.bot = await start(agent, { abortSignal: ac.signal },global);
+  console.log(1)
   return bot;
 }
 
