@@ -13,9 +13,22 @@
  *   --message-server-port <port>                   # Enable HTTP server on specified port
  *   --message-server-key <key>                     # Authentication key for HTTP server
  *
+ * HTTP Server Endpoints:
+ *   POST /sendmessage                              # Send plain text message
+ *   POST /sendmessage/json                         # Send JSON message (with text and/or media)
+ *
  * Examples:
  *   npx weixin-acp start -- node ./my-agent.js
  *   npx weixin-acp claude-code --message-server-port 3000 --message-server-key mysecret
+ *
+ *   # Send text message:
+ *   curl -X POST http://localhost:3000/sendmessage -H "Authorization: Bearer mysecret" -d "Hello!"
+ *
+ *   # Send JSON message with media:
+ *   curl -X POST http://localhost:3000/sendmessage/json \
+ *     -H "Authorization: Bearer mysecret" \
+ *     -H "Content-Type: application/json" \
+ *     -d '{"text":"Check this","media":{"type":"image","url":"/path/to/img.png"}}'
  */
 
 import { isLoggedIn, login, logout, start } from "weixin-agent-sdk";
@@ -68,7 +81,18 @@ function startMessageServer(
       return;
     }
 
-    if (req.url !== "/sendmessage" || req.method !== "POST") {
+    if (req.method !== "POST") {
+      res.writeHead(405, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+
+    // Parse URL to get path without query string
+    const urlObj = new URL(req.url || "", `http://${req.headers.host}`);
+    const path = urlObj.pathname;
+
+    // Only accept /sendmessage or /sendmessage/json
+    if (path !== "/sendmessage" && path !== "/sendmessage/json") {
       res.writeHead(404, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "Not found" }));
       return;
@@ -77,8 +101,7 @@ function startMessageServer(
     // Check authentication if key is provided
     if (key) {
       const authHeader = req.headers.authorization;
-      const urlParams = new URL(req.url, `http://${req.headers.host}`).searchParams;
-      const queryKey = urlParams.get("key");
+      const queryKey = urlObj.searchParams.get("key");
 
       let authenticated = false;
 
@@ -114,7 +137,16 @@ function startMessageServer(
 
     req.on("end", async () => {
       try {
-        const message = JSON.parse(body);
+        let message: string | object;
+
+        if (path === "/sendmessage/json") {
+          // JSON endpoint: parse body as JSON
+          message = JSON.parse(body);
+        } else {
+          // Default endpoint: treat body as plain text
+          message = body;
+        }
+
         await bot.sendMessage(message);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
@@ -134,7 +166,8 @@ function startMessageServer(
     } else {
       console.log(`[message-server] WARNING: No authentication key set`);
     }
-    console.log(`[message-server] POST to /sendmessage to send messages`);
+    console.log(`[message-server] POST to /sendmessage for text messages`);
+    console.log(`[message-server] POST to /sendmessage/json for JSON messages`);
   });
 
   return server;
